@@ -142,6 +142,16 @@ func (p *Protector) Dial(network, addr string, timeout time.Duration) (net.Conn,
 }
 
 func (p *Protector) dial(op ops.Op, network, addr string, timeout time.Duration) (net.Conn, error) {
+	socketType := 0
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+		socketType = syscall.SOCK_STREAM
+	case "udp", "udp4", "udp6":
+		socketType = syscall.SOCK_DGRAM
+	default:
+		return nil, errors.New("Unsupported network: %v", network)
+	}
+
 	start := time.Now()
 
 	remainingTimeout := func() time.Duration {
@@ -180,7 +190,7 @@ func (p *Protector) dial(op ops.Op, network, addr string, timeout time.Duration)
 	}
 	copy(conn.ip[:], ip.To4())
 
-	socketFd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	socketFd, err := syscall.Socket(syscall.AF_INET, socketType, 0)
 	if err != nil {
 		return nil, errors.New("Could not create socket: %v", err)
 	}
