@@ -61,6 +61,41 @@ func TestConnectHost(t *testing.T) {
 	}
 }
 
+func TestUDP(t *testing.T) {
+	l, err := net.ListenPacket("udp", ":53243")
+	if !assert.NoError(t, err) {
+		return
+	}
+	go func() {
+		b := make([]byte, 4)
+		_, addr, err := l.ReadFrom(b)
+		if !assert.NoError(t, err) {
+			return
+		}
+		l.WriteTo(b, addr)
+	}()
+
+	p := &testprotector{}
+	pt := New(p.Protect, "8.8.8.8")
+	conn, err := pt.Dial("udp", l.LocalAddr().String(), 10*time.Second)
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer conn.Close()
+
+	_, err = conn.Write([]byte("echo"))
+	if !assert.NoError(t, err) {
+		return
+	}
+	b := make([]byte, 4)
+	_, err = conn.Read(b)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, "echo", string(b))
+	assert.NotEqual(t, 0, p.lastProtected, "Should have gotten file descriptor from protecting")
+}
+
 func sendTestRequest(client *http.Client, addr string) error {
 	log := golog.LoggerFor("protected")
 
