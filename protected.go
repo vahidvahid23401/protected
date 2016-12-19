@@ -148,6 +148,7 @@ func (p *Protector) DialContext(ctx context.Context, network, addr string) (net.
 	}
 	defer op.End()
 
+	// Dial in goroutine to support arbitrary cancellation.
 	var conn net.Conn
 	var err error
 	chDone := make(chan bool)
@@ -158,6 +159,7 @@ func (p *Protector) DialContext(ctx context.Context, network, addr string) (net.
 	select {
 	case <-ctx.Done():
 		go func() {
+			<-chDone
 			if conn != nil {
 				conn.Close()
 			}
@@ -168,7 +170,8 @@ func (p *Protector) DialContext(ctx context.Context, network, addr string) (net.
 	}
 }
 
-// dialContext checks if context has been done between each phase to avoid unnecessary work
+// dialContext checks if context has been done between each phase to avoid
+// unnecessary work, but doesn't support arbitrary cancellation.
 func (p *Protector) dialContext(op ops.Op, ctx context.Context, network, addr string) (net.Conn, error) {
 	socketType := 0
 	switch network {
