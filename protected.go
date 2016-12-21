@@ -3,6 +3,7 @@
 package protected
 
 import (
+	"context"
 	"net"
 	"os"
 	"strconv"
@@ -13,7 +14,6 @@ import (
 	"github.com/getlantern/errors"
 	"github.com/getlantern/golog"
 	"github.com/getlantern/ops"
-	"github.com/getlantern/withtimeout"
 )
 
 var (
@@ -135,13 +135,44 @@ func (p *Protector) resolve(op ops.Op, network string, addr string) (*net.TCPAdd
 //   specified system device (this is primarily
 //   used for Android VpnService routing functionality)
 func (p *Protector) Dial(network, addr string, timeout time.Duration) (net.Conn, error) {
-	op := ops.Begin("protected-dial").Set("addr", addr).Set("timeout", timeout.Seconds())
-	defer op.End()
-	conn, err := p.dial(op, network, addr, timeout)
-	return conn, op.FailIf(err)
+	ctx, _ := context.WithTimeout(context.Background(), timeout)
+	return p.DialContext(ctx, network, addr)
 }
 
-func (p *Protector) dial(op ops.Op, network, addr string, timeout time.Duration) (net.Conn, error) {
+// DialContext is same as Dial, but accepts a context instead of timeout value.
+func (p *Protector) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	op := ops.Begin("protected-dial").Set("addr", addr)
+	dl, ok := ctx.Deadline()
+	if ok {
+		op.Set("timeout", dl.Sub(time.Now()).Seconds())
+	}
+	defer op.End()
+
+	// Dial in goroutine to support arbitrary cancellation.
+	var conn net.Conn
+	var err error
+	chDone := make(chan bool)
+	go func() {
+		conn, err = p.dialContext(op, ctx, network, addr)
+		chDone <- true
+	}()
+	select {
+	case <-ctx.Done():
+		go func() {
+			<-chDone
+			if conn != nil {
+				conn.Close()
+			}
+		}()
+		return nil, op.FailIf(ctx.Err())
+	case <-chDone:
+		return conn, op.FailIf(err)
+	}
+}
+
+// dialContext checks if context has been done between each phase to avoid
+// unnecessary work, but doesn't support arbitrary cancellation.
+func (p *Protector) dialContext(op ops.Op, ctx context.Context, network, addr string) (net.Conn, error) {
 	socketType := 0
 	switch network {
 	case "tcp", "tcp4", "tcp6":
@@ -151,39 +182,26 @@ func (p *Protector) dial(op ops.Op, network, addr string, timeout time.Duration)
 	default:
 		return nil, errors.New("Unsupported network: %v", network)
 	}
-
-	start := time.Now()
-
-	remainingTimeout := func() time.Duration {
-		return timeout - time.Now().Sub(start)
-	}
-
 	host, port, err := SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
 
-	_ip, timedOut, err := withtimeout.Do(remainingTimeout(), func() (interface{}, error) {
-		// do DNS query
-		ip := net.ParseIP(host)
-		if ip != nil {
-			return ip, nil
-		}
+	ip := net.ParseIP(host)
+	if ip == nil {
 		// Try to resolve it
 		addr, err := p.Resolve(network, addr)
 		if err != nil {
 			return nil, err
 		}
-		return addr.IP, nil
-	})
-
-	if timedOut {
-		return nil, errors.New("Timed out looking up address %v within %v", addr, timeout)
-	} else if err != nil {
-		return nil, errors.New("Unable to look up address %v: %v", addr, err)
+		ip = addr.IP
 	}
 
-	ip := _ip.(net.IP)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 
 	conn := &ProtectedConn{
 		port: port,
@@ -196,25 +214,22 @@ func (p *Protector) dial(op ops.Op, network, addr string, timeout time.Duration)
 	}
 	conn.socketFd = socketFd
 	defer conn.cleanup()
+	// Actually protect the underlying socket here
+	p.protect(conn.socketFd)
 
-	_, timedOut, err = withtimeout.Do(remainingTimeout(), func() (interface{}, error) {
-		// Actually protect the underlying socket here
-		return nil, p.protect(conn.socketFd)
-	})
-	if timedOut {
-		return nil, errors.New("Timed out protecting socket to %v within %v", addr, timeout)
-	} else if err != nil {
-		return nil, errors.New("Unable to protect socket to %v: %v", addr, err)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
 
-	_, timedOut, err = withtimeout.Do(remainingTimeout(), func() (interface{}, error) {
-		// Actually protect the underlying socket here
-		return nil, conn.connectSocket()
-	})
-	if timedOut {
-		return nil, errors.New("Timed out connecting socket to %v within %v", addr, timeout)
-	} else if err != nil {
-		return nil, errors.New("Unable to connect socket to %v: %v", addr, err)
+	// Actually connect the underlying socket
+	conn.connectSocket()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
 
 	// finally, convert the socket fd to a net.Conn
