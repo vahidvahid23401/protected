@@ -12,12 +12,7 @@ import (
 	"time"
 
 	"github.com/getlantern/errors"
-	"github.com/getlantern/golog"
 	"github.com/getlantern/ops"
-)
-
-var (
-	log = golog.LoggerFor("lantern-android.protected")
 )
 
 const (
@@ -110,21 +105,17 @@ func (p *Protector) resolve(op ops.Op, network string, addr string) (*net.TCPAdd
 	// represented by file
 	fileConn, err := net.FileConn(file)
 	if err != nil {
-		log.Errorf("Error returning a copy of the network connection: %v", err)
 		return nil, err
 	}
 
 	setQueryTimeouts(fileConn)
 
-	log.Debugf("performing dns lookup...!!")
 	result, err := dnsLookup(host, fileConn)
 	if err != nil {
-		log.Errorf("Error doing DNS resolution: %v", err)
 		return nil, err
 	}
 	ipAddr, err := result.PickRandomIP()
 	if err != nil {
-		log.Errorf("No IP address available: %v", err)
 		return nil, err
 	}
 	return &net.TCPAddr{IP: ipAddr, Port: port}, nil
@@ -323,12 +314,10 @@ func setQueryTimeouts(c net.Conn) {
 func SplitHostPort(addr string) (string, int, error) {
 	host, sPort, err := net.SplitHostPort(addr)
 	if err != nil {
-		log.Errorf("Could not split network address: %v", err)
 		return "", 0, err
 	}
 	port, err := strconv.Atoi(sPort)
 	if err != nil {
-		log.Errorf("No port number found %v", err)
 		return "", 0, err
 	}
 	return host, port, nil
