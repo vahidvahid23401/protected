@@ -38,8 +38,6 @@ func (response *DnsResponse) PickRandomIP() (net.IP, error) {
 // dnsLookup is used whenever we need to conduct a DNS query over a given TCP connection
 func dnsLookup(addr string, conn net.Conn) (*DnsResponse, error) {
 
-	log.Debugf("Doing a DNS lookup on %s", addr)
-
 	dnsResponse := &DnsResponse{
 		records: make([]record, 0),
 	}
@@ -59,7 +57,6 @@ func dnsLookup(addr string, conn net.Conn) (*DnsResponse, error) {
 
 	response, err := dnsConn.ReadMsg()
 	if err != nil {
-		log.Errorf("Could not process DNS response: %v", err)
 		return nil, err
 	}
 
